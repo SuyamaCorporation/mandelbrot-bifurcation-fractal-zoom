@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>マンデルブロ分岐図フラクタルズームエクスプローラー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center py-6 px-4">
+<h1 class="text-2xl font-bold mb-2 text-cyan-300">マンデルブロ集合 フラクタルズームエクスプローラー</h1>
+<p class="text-sm text-gray-400 mb-4">左クリック: ズームイン ／ 右クリック: ズームアウト</p>
+
+<div class="flex flex-col lg:flex-row gap-4 w-full max-w-4xl items-start">
+  <!-- Canvas -->
+  <div class="flex-1">
+    <div class="relative">
+      <canvas id="canvas" width="600" height="400"
+        class="rounded-xl border border-cyan-800 cursor-crosshair max-w-full"
+        aria-label="マンデルブロ集合キャンバス（左クリックでズームイン、右クリックでズームアウト）">
+      </canvas>
+      <!-- Progress bar overlay -->
+      <div id="progressOverlay" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 bg-opacity-80 rounded-xl hidden">
+        <p class="text-cyan-300 font-semibold mb-3">計算中...</p>
+        <div class="w-48 bg-gray-700 rounded-full h-3" role="progressbar" aria-label="計算進捗">
+          <div id="progressBar" class="bg-cyan-400 h-3 rounded-full transition-all duration-100" style="width:0%"></div>
+        </div>
+        <p id="progressText" class="text-xs text-gray-400 mt-2">0%</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <div class="bg-gray-800 rounded-xl p-4 lg:w-56 w-full text-sm flex flex-col gap-3">
+    <div>
+      <p class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-1">中心座標</p>
+      <p class="text-cyan-300 font-mono" id="infoCenter">Re: -0.5000, Im: 0.0000</p>
+    </div>
+    <div>
+      <p class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-1">ズーム倍率</p>
+      <p class="text-cyan-300 font-mono" id="infoZoom">×1.0</p>
+    </div>
+    <div>
+      <p class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-1">表示範囲</p>
+      <p class="text-gray-300 font-mono text-xs" id="infoRange">Re: -2.5〜1.0</p>
+      <p class="text-gray-300 font-mono text-xs" id="infoRange2">Im: -1.0〜1.0</p>
+    </div>
+    <div>
+      <p class="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-1">最大イテレーション</p>
+      <div class="flex items-center gap-2">
+        <input type="range" id="maxIter" min="50" max="500" value="100" step="50"
+          class="flex-1 accent-cyan-400" aria-label="最大イテレーション数">
+        <span id="maxIterVal" class="text-cyan-300 font-mono text-xs w-10">100</span>
+      </div>
+    </div>
+    <button id="resetBtn" class="bg-cyan-700 hover:bg-cyan-600 text-white py-2 rounded font-semibold transition" aria-label="表示をリセット">リセット</button>
+
+    <div class="text-xs text-gray-500 mt-auto">
+      <p>深くズームすると計算に時間がかかります</p>
+    </div>
+  </div>
+</div>
+
+<script>
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+let centerX = -0.5, centerY = 0.0;
+let zoom = 1.0;
+let maxIter = 100;
+let rendering = false;
+
+// Initial view bounds
+const INIT_RE_MIN = -2.5, INIT_RE_MAX = 1.0;
+const INIT_IM_MIN = -1.0, INIT_IM_MAX = 1.0;
+
+function getViewBounds() {
+  const rangeRe = (INIT_RE_MAX - INIT_RE_MIN) / zoom;
+  const rangeIm = (INIT_IM_MAX - INIT_IM_MIN) / zoom;
+  return {
+    reMin: centerX - rangeRe / 2,
+    reMax: centerX + rangeRe / 2,
+    imMin: centerY - rangeIm / 2,
+    imMax: centerY + rangeIm / 2
+  };
+}
+
+function iterateMandelbrot(cRe, cIm, maxI) {
+  let zRe = 0, zIm = 0;
+  for (let i = 0; i < maxI; i++) {
+    const zRe2 = zRe * zRe - zIm * zIm + cRe;
+    const zIm2 = 2 * zRe * zIm + cIm;
+    zRe = zRe2; zIm = zIm2;
+    if (zRe * zRe + zIm * zIm > 4) return i;
+  }
+  return maxI;
+}
+
+function colorize(iter, maxI) {
+  if (iter === maxI) return [0, 0, 0];
+  const t = iter / maxI;
+  // Smooth coloring with vivid palette
+  const r = Math.round(9 * (1 - t) * t * t * t * 255);
+  const g = Math.round(15 * (1 - t) * (1 - t) * t * t * 255);
+  const b = Math.round(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);
+  // Additional hue cycling
+  const h = (iter * 7) % 360;
+  const rr = Math.round(128 + 127 * Math.sin((h) * Math.PI / 180));
+  const gg = Math.round(128 + 127 * Math.sin((h + 120) * Math.PI / 180));
+  const bb = Math.round(128 + 127 * Math.sin((h + 240) * Math.PI / 180));
+  return [
+    Math.min(255, r + rr * 0.3 | 0),
+    Math.min(255, g + gg * 0.3 | 0),
+    Math.min(255, b + bb * 0.3 | 0)
+  ];
+}
+
+function renderMandelbrot() {
+  if (rendering) return;
+  rendering = true;
+  const overlay = document.getElementById('progressOverlay');
+  const bar = document.getElementById('progressBar');
+  const pText = document.getElementById('progressText');
+  overlay.classList.remove('hidden');
+
+  const bounds = getViewBounds();
+  const imgData = ctx.createImageData(W, H);
+  const data = imgData.data;
+
+  const CHUNK = 20;
+  let row = 0;
+
+  function renderChunk() {
+    const end = Math.min(row + CHUNK, H);
+    for (let y = row; y < end; y++) {
+      const im = bounds.imMin + (y / H) * (bounds.imMax - bounds.imMin);
+      for (let x = 0; x < W; x++) {
+        const re = bounds.reMin + (x / W) * (bounds.reMax - bounds.reMin);
+        const iter = iterateMandelbrot(re, im, maxIter);
+        const [r, g, b] = colorize(iter, maxIter);
+        const idx = (y * W + x) * 4;
+        data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+      }
+    }
+    row = end;
+    const pct = Math.round((row / H) * 100);
+    bar.style.width = pct + '%';
+    pText.textContent = pct + '%';
+
+    if (row < H) {
+      requestAnimationFrame(renderChunk);
+    } else {
+      ctx.putImageData(imgData, 0, 0);
+      overlay.classList.add('hidden');
+      rendering = false;
+      updateInfo();
+    }
+  }
+  renderChunk();
+}
+
+function updateInfo() {
+  document.getElementById('infoCenter').textContent =
+    `Re: ${centerX.toFixed(6)}\nIm: ${centerY.toFixed(6)}`;
+  document.getElementById('infoZoom').textContent = `×${zoom.toFixed(2)}`;
+  const b = getViewBounds();
+  document.getElementById('infoRange').textContent = `Re: ${b.reMin.toFixed(3)}〜${b.reMax.toFixed(3)}`;
+  document.getElementById('infoRange2').textContent = `Im: ${b.imMin.toFixed(3)}〜${b.imMax.toFixed(3)}`;
+}
+
+canvas.addEventListener('click', e => {
+  if (rendering) return;
+  const rect = canvas.getBoundingClientRect();
+  const px = (e.clientX - rect.left) / rect.width;
+  const py = (e.clientY - rect.top) / rect.height;
+  const b = getViewBounds();
+  centerX = b.reMin + px * (b.reMax - b.reMin);
+  centerY = b.imMin + py * (b.imMax - b.imMin);
+  zoom *= 2;
+  renderMandelbrot();
+});
+
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  if (rendering) return;
+  if (zoom <= 1) return;
+  zoom = Math.max(1, zoom / 2);
+  if (zoom === 1) { centerX = -0.5; centerY = 0; }
+  renderMandelbrot();
+});
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  if (rendering) return;
+  centerX = -0.5; centerY = 0; zoom = 1;
+  renderMandelbrot();
+});
+
+document.getElementById('maxIter').addEventListener('change', e => {
+  maxIter = parseInt(e.target.value);
+  document.getElementById('maxIterVal').textContent = maxIter;
+  if (!rendering) renderMandelbrot();
+});
+
+renderMandelbrot();
+</script>
+</body>
+</html>
